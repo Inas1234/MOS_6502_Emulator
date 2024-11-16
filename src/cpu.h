@@ -25,7 +25,7 @@ typedef struct {
 void reset_cpu(CPU * cpu);
 uint8_t fetch(CPU * cpu, uint8_t * memory);
 void execute(CPU *cpu, uint8_t * memory);
-
+void load_program(CPU *cpu, uint8_t *memory, const char *filename, uint16_t start_address);
 
 void lda_immediate(CPU *cpu, uint8_t *memory);
 void lda_zero_page(CPU *cpu, uint8_t *memory);
@@ -80,8 +80,6 @@ void php(CPU *cpu, uint8_t *memory);
 void pla(CPU *cpu, uint8_t *memory);
 void plp(CPU *cpu, uint8_t *memory);
 
-// System Operations
-void brk(CPU *cpu);
 void nop(CPU *cpu);
 void clc(CPU *cpu);
 void cld(CPU *cpu);
@@ -130,6 +128,30 @@ void lda_indirect_indexed(CPU *cpu, uint8_t *memory);
 void sta_zero_page_x(CPU *cpu, uint8_t *memory);
 void sta_absolute_x(CPU *cpu, uint8_t *memory);
 void sta_absolute_y(CPU *cpu, uint8_t *memory);
+
+void lax(CPU *cpu, uint8_t *memory);
+void sax(CPU *cpu, uint8_t *memory);
+void dcp(CPU *cpu, uint8_t *memory);
+void isb(CPU *cpu, uint8_t *memory);
+void slo(CPU *cpu, uint8_t *memory);
+void sre(CPU *cpu, uint8_t *memory);
+
+void ora_absolute_x(CPU *cpu, uint8_t *memory);
+void ora_absolute_y(CPU *cpu, uint8_t *memory);
+void ora_zero_page(CPU *cpu, uint8_t *memory);
+void eor_indexed_indirect(CPU *cpu, uint8_t *memory);
+void eor_indirect_indexed(CPU *cpu, uint8_t *memory);
+void eor_indirect(CPU *cpu, uint8_t *memory);
+void eor_zero_page_x(CPU *cpu, uint8_t *memory);
+
+void nop_zero_page(CPU *cpu, uint8_t *memory);
+void nop_zero_page_x(CPU *cpu, uint8_t *memory);
+
+void asl_zero_page(CPU *cpu, uint8_t *memory);
+void alr_immediate(CPU *cpu, uint8_t *memory);
+void anc_immediate(CPU *cpu, uint8_t *memory);
+
+void brk(CPU *cpu, uint8_t * memory);
 
 
 #endif

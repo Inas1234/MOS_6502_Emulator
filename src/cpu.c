@@ -22,6 +22,32 @@ void reset_cpu(CPU * cpu) {
     cpu->PC = 0x600;
 }
 
+void load_program(CPU *cpu, uint8_t *memory, const char *filename, uint16_t start_address) {
+    FILE *file = fopen(filename, "rb");
+    if (file == NULL) {
+        printf("Error: Unable to open file %s\n", filename);
+        return;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    rewind(file);
+
+    if (file_size > MEMORY_SIZE) {
+        printf("Error: Program size exceeds available memory.\n");
+        fclose(file);
+        return;
+    }
+
+    fread(&memory[start_address], sizeof(uint8_t), file_size, file);
+    fclose(file);
+
+    cpu->PC = start_address;
+
+    printf("Loaded %ld bytes from %s into memory at $%04X\n", file_size, filename, start_address);
+}
+
+
 uint8_t fetch(CPU * cpu, uint8_t * memory) {
     return memory[cpu->PC++];
 }
@@ -77,8 +103,15 @@ void execute(CPU *cpu, uint8_t *memory) {
         case 0x28: plp(cpu, memory); break;
 
         // System Operations
-        case 0x00: brk(cpu); break;
-        case 0xEA: nop(cpu); break;
+        case 0x00: brk(cpu, memory); break;
+        case 0x80: case 0x82: case 0x89: case 0xC2: case 0xE2: nop(cpu); break; // NOP Variants
+
+        case 0xA7: case 0xB7: case 0xAF: case 0xBF: case 0xA3: case 0xB3: lax(cpu, memory); break;
+        case 0x87: case 0x97: case 0x8F: case 0x83: sax(cpu, memory); break;
+        case 0xC7: case 0xD7: case 0xCF: case 0xDF: case 0xDB: case 0xC3: case 0xD3: dcp(cpu, memory); break;
+        case 0xE7: case 0xF7: case 0xEF: case 0xFF: case 0xFB: case 0xE3: case 0xF3: isb(cpu, memory); break;
+        case 0x07: case 0x17: case 0x0F: case 0x1F: case 0x1B: case 0x03: case 0x13: slo(cpu, memory); break;
+        case 0x47: case 0x57: case 0x4F: case 0x5F: case 0x5B: case 0x43: case 0x53: sre(cpu, memory); break;
         case 0x18: clc(cpu); break;
         case 0xD8: cld(cpu); break;
         case 0x58: cli(cpu); break;
@@ -108,6 +141,22 @@ void execute(CPU *cpu, uint8_t *memory) {
         case 0x4E: lsr_absolute(cpu, memory); break;
         case 0x2E: rol_absolute(cpu, memory); break;
         case 0x6E: ror_absolute(cpu, memory); break;
+
+        case 0x41: eor_indexed_indirect(cpu, memory); break;   // EOR ($nn, X)
+        case 0x71: eor_indirect_indexed(cpu, memory); break;   // EOR ($nn), Y
+        case 0x7F: ora_absolute_x(cpu, memory); break;         // ORA $nnnn, X
+        case 0x19: ora_absolute_y(cpu, memory); break;         // ORA $nnnn, Y
+        case 0x1A: nop(cpu); break;                            // NOP (65C02)
+        case 0x04: nop_zero_page(cpu, memory); break;          // NOP $nn (Zero Page)
+        case 0x05: ora_zero_page(cpu, memory); break;          // ORA $nn
+        case 0x06: asl_zero_page(cpu, memory); break;          // ASL $nn
+        case 0x0B: anc_immediate(cpu, memory); break;          // ANC (Unofficial)
+        case 0x52: eor_indirect(cpu, memory); break;           // EOR ($nn)
+        case 0x54: nop_zero_page_x(cpu, memory); break;        // NOP $nn, X
+        case 0x55: eor_zero_page_x(cpu, memory); break;        // EOR $nn, X
+        case 0x4B: alr_immediate(cpu, memory); break;          // ALR (Unofficial)
+
+        case 0x02: brk(cpu, memory); break; // Handle 0x02 as BRK
 
         default:
             printf("Unknown opcode: 0x%02X\n", opcode);
@@ -375,14 +424,51 @@ void plp(CPU *cpu, uint8_t *memory) {
 }
 
 
-void brk(CPU *cpu) {
-    cpu->PC++;
-    SET_FLAG(cpu, FLAG_BREAK);
-    // Typically, BRK would push PC and status to the stack and jump to an interrupt vector.
-}
 
 void nop(CPU *cpu) {
-    // Does nothing
+    (void)cpu; // No operation, just advance the program counter
+}
+
+void lax(CPU *cpu, uint8_t *memory) {
+    uint8_t value = fetch(cpu, memory);
+    cpu->A = value;
+    cpu->X = value;
+    update_zero_and_negative_flags(cpu, value);
+}
+
+void sax(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    memory[address] = cpu->A & cpu->X;
+}
+
+void dcp(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    memory[address]--;
+    if (cpu->A >= memory[address]) SET_FLAG(cpu, FLAG_CARRY);
+    else CLEAR_FLAG(cpu, FLAG_CARRY);
+    update_zero_and_negative_flags(cpu, cpu->A - memory[address]);
+}
+
+void isb(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    memory[address]++;
+    uint16_t result = cpu->A - memory[address] - (CHECK_FLAG(cpu, FLAG_CARRY) ? 0 : 1);
+    update_zero_and_negative_flags(cpu, result & 0xFF);
+    cpu->A = result & 0xFF;
+}
+
+void slo(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    memory[address] <<= 1;
+    cpu->A |= memory[address];
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+void sre(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    memory[address] >>= 1;
+    cpu->A ^= memory[address];
+    update_zero_and_negative_flags(cpu, cpu->A);
 }
 
 void clc(CPU *cpu) {
@@ -622,3 +708,93 @@ void ror_absolute(CPU *cpu, uint8_t *memory) {
     update_zero_and_negative_flags(cpu, value);
 }
 
+// EOR Indexed Indirect ($nn, X)
+void eor_indexed_indirect(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory) + cpu->X;
+    uint16_t effective_address = memory[address] | (memory[address + 1] << 8);
+    cpu->A ^= memory[effective_address];
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+// EOR Indirect Indexed ($nn), Y
+void eor_indirect_indexed(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    uint16_t effective_address = memory[address] | (memory[address + 1] << 8);
+    cpu->A ^= memory[effective_address + cpu->Y];
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+// ORA Absolute, Y
+void ora_absolute_y(CPU *cpu, uint8_t *memory) {
+    uint16_t address = fetch(cpu, memory) | (fetch(cpu, memory) << 8);
+    cpu->A |= memory[address + cpu->Y];
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+// ORA Zero Page
+void ora_zero_page(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    cpu->A |= memory[address];
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+// ASL Zero Page
+void asl_zero_page(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    if (memory[address] & 0x80) SET_FLAG(cpu, FLAG_CARRY);
+    else CLEAR_FLAG(cpu, FLAG_CARRY);
+    memory[address] <<= 1;
+    update_zero_and_negative_flags(cpu, memory[address]);
+}
+
+// ALR (Unofficial)
+void alr_immediate(CPU *cpu, uint8_t *memory) {
+    cpu->A &= fetch(cpu, memory);
+    cpu->A >>= 1;
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+// ANC (Unofficial)
+void anc_immediate(CPU *cpu, uint8_t *memory) {
+    cpu->A &= fetch(cpu, memory);
+    update_zero_and_negative_flags(cpu, cpu->A);
+    if (cpu->A & 0x80) SET_FLAG(cpu, FLAG_CARRY);
+    else CLEAR_FLAG(cpu, FLAG_CARRY);
+}
+
+void ora_absolute_x(CPU *cpu, uint8_t *memory) {
+    uint16_t address = fetch(cpu, memory) | (fetch(cpu, memory) << 8);
+    cpu->A |= memory[address + cpu->X];
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+void nop_zero_page(CPU *cpu, uint8_t *memory) {
+    fetch(cpu, memory); // Read and ignore the zero-page address
+}
+
+void eor_zero_page_x(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory) + cpu->X;
+    cpu->A ^= memory[address];
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+void eor_indirect(CPU *cpu, uint8_t *memory) {
+    uint8_t address = fetch(cpu, memory);
+    uint16_t effective_address = memory[address] | (memory[address + 1] << 8);
+    cpu->A ^= memory[effective_address];
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
+void nop_zero_page_x(CPU *cpu, uint8_t *memory) {
+    fetch(cpu, memory); // Read and ignore the zero-page X address
+}
+
+void brk(CPU *cpu, uint8_t * memory) {
+    cpu->PC++;
+    SET_FLAG(cpu, FLAG_BREAK);
+    uint16_t return_address = cpu->PC + 1;
+    memory[0x0100 + cpu->SP--] = (return_address >> 8) & 0xFF;
+    memory[0x0100 + cpu->SP--] = return_address & 0xFF;
+    memory[0x0100 + cpu->SP--] = cpu->status;
+    cpu->PC = memory[0xFFFE] | (memory[0xFFFF] << 8); // Jump to the IRQ/BRK vector
+}
