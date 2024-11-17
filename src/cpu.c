@@ -1,4 +1,6 @@
 #include "cpu.h"
+#include "memory.h"
+
 
 void update_zero_and_negative_flags(CPU *cpu, uint8_t value) {
     if (value == 0)
@@ -20,36 +22,27 @@ void reset_cpu(CPU * cpu) {
     cpu->SP = 0xFF;
     cpu->status = 0;
     cpu->PC = 0x600;
+    cpu->is_running = 1;
 }
 
-void load_program(CPU *cpu, uint8_t *memory, const char *filename, uint16_t start_address) {
+void load_program(const char *filename, uint16_t load_address) {
     FILE *file = fopen(filename, "rb");
     if (file == NULL) {
-        printf("Error: Unable to open file %s\n", filename);
+        printf("Error: Unable to open ROM file %s\n", filename);
         return;
     }
 
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    rewind(file);
-
-    if (file_size > MEMORY_SIZE) {
-        printf("Error: Program size exceeds available memory.\n");
-        fclose(file);
-        return;
-    }
-
-    fread(&memory[start_address], sizeof(uint8_t), file_size, file);
+    fread(&memory[load_address], sizeof(uint8_t), MEMORY_SIZE - load_address, file);
     fclose(file);
-
-    cpu->PC = start_address;
-
-    printf("Loaded %ld bytes from %s into memory at $%04X\n", file_size, filename, start_address);
+    printf("Loaded program into memory at $%04X\n", load_address);
 }
 
 
 uint8_t fetch(CPU * cpu, uint8_t * memory) {
-    return memory[cpu->PC++];
+    (void)memory;
+    uint8_t value = read_memory(cpu->PC);
+    cpu->PC++;
+    return value;
 }
 
 void execute(CPU *cpu, uint8_t *memory) {
@@ -58,6 +51,7 @@ void execute(CPU *cpu, uint8_t *memory) {
     switch (opcode) {
         // Load/Store Instructions
         case 0xA9: lda_immediate(cpu, memory); break;
+        case 0xAD: lda_absolute(cpu, memory); break;
         case 0x8D: sta_absolute(cpu, memory); break;
         case 0xA2: ldx_immediate(cpu, memory); break;
         case 0xA0: ldy_immediate(cpu, memory); break;
@@ -155,6 +149,8 @@ void execute(CPU *cpu, uint8_t *memory) {
         case 0x54: nop_zero_page_x(cpu, memory); break;        // NOP $nn, X
         case 0x55: eor_zero_page_x(cpu, memory); break;        // EOR $nn, X
         case 0x4B: alr_immediate(cpu, memory); break;          // ALR (Unofficial)
+        case 0xFE: inc_absolute_x(cpu, memory); break;
+
 
         case 0x02: brk(cpu, memory); break; // Handle 0x02 as BRK
 
@@ -166,27 +162,26 @@ void execute(CPU *cpu, uint8_t *memory) {
 
 
 void lda_immediate(CPU *cpu, uint8_t *memory) {
-    cpu->A = memory[cpu->PC++];
-    if (cpu->A == 0) {
-        SET_FLAG(cpu, FLAG_ZERO);
-    }
-    else {
-        CLEAR_FLAG(cpu, FLAG_ZERO);
-    }
-
-    if (cpu->A & 0x80){
-        SET_FLAG(cpu, FLAG_NEGATIVE);
-    }
-    else {
-        CLEAR_FLAG(cpu, FLAG_NEGATIVE);
-    }
+    cpu->A = read_memory(cpu->PC++); // Fetch using read_memory
+    update_zero_and_negative_flags(cpu, cpu->A);
 }
+
+void lda_absolute(CPU *cpu, uint8_t *memory) {
+    uint16_t address = fetch(cpu, memory);
+    address |= (fetch(cpu, memory) << 8);
+    
+    cpu->A = read_memory(address);
+    
+    update_zero_and_negative_flags(cpu, cpu->A);
+}
+
 
 void sta_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    memory[address] = cpu->A;
+    write_memory(address, cpu->A); // Write using write_memory
 }
+
 
 void adc_immediate(CPU *cpu, uint8_t *memory) {
     uint8_t value = fetch(cpu, memory);
@@ -198,17 +193,7 @@ void adc_immediate(CPU *cpu, uint8_t *memory) {
         CLEAR_FLAG(cpu, FLAG_CARRY);
     }
 
-    if ((result & 0xFF) == 0) {
-        SET_FLAG(cpu, FLAG_ZERO);
-    } else {
-        CLEAR_FLAG(cpu, FLAG_ZERO);
-    }
-
-    if (result & 0x80) {
-        SET_FLAG(cpu, FLAG_NEGATIVE);
-    } else {
-        CLEAR_FLAG(cpu, FLAG_NEGATIVE);
-    }
+    update_zero_and_negative_flags(cpu, result & 0xFF);
 
     if (((cpu->A ^ value) & 0x80) == 0 && ((cpu->A ^ result) & 0x80)) {
         SET_FLAG(cpu, FLAG_OVERFLOW);
@@ -229,17 +214,7 @@ void sbc_immediate(CPU *cpu, uint8_t *memory) {
         CLEAR_FLAG(cpu, FLAG_CARRY);
     }
 
-    if ((result & 0xFF) == 0) {
-        SET_FLAG(cpu, FLAG_ZERO);
-    } else {
-        CLEAR_FLAG(cpu, FLAG_ZERO);
-    }
-
-    if (result & 0x80) {
-        SET_FLAG(cpu, FLAG_NEGATIVE);
-    } else {
-        CLEAR_FLAG(cpu, FLAG_NEGATIVE);
-    }
+    update_zero_and_negative_flags(cpu, result & 0xFF);
 
     if (((cpu->A ^ value) & 0x80) && ((cpu->A ^ result) & 0x80)) {
         SET_FLAG(cpu, FLAG_OVERFLOW);
@@ -262,25 +237,25 @@ void ldy_immediate(CPU *cpu, uint8_t *memory) {
 
 void stx_zero_page(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address] = cpu->X;
+    write_memory(address, cpu->X); // Write using write_memory
 }
 
 void sty_zero_page(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address] = cpu->Y;
+    write_memory(address, cpu->Y); // Write using write_memory
 }
 
 void cmp_immediate(CPU *cpu, uint8_t *memory) {
     uint8_t value = fetch(cpu, memory);
     uint16_t result = cpu->A - value;
     
-    // Set flags
-    if (cpu->A >= value)
+    if (cpu->A >= value) {
         SET_FLAG(cpu, FLAG_CARRY);
-    else
+    } else {
         CLEAR_FLAG(cpu, FLAG_CARRY);
+    }
 
-    update_zero_and_negative_flags(cpu, (uint8_t)result);
+    update_zero_and_negative_flags(cpu, result & 0xFF);
 }
 
 void cpx_immediate(CPU *cpu, uint8_t *memory) {
@@ -407,23 +382,21 @@ void bne(CPU *cpu, uint8_t *memory) {
 }
 
 void pha(CPU *cpu, uint8_t *memory) {
-    memory[0x0100 + cpu->SP--] = cpu->A;
+    write_memory(0x0100 + cpu->SP--, cpu->A); // Use write_memory for stack push
 }
 
 void php(CPU *cpu, uint8_t *memory) {
-    memory[0x0100 + cpu->SP--] = cpu->status | FLAG_BREAK | FLAG_UNUSED;
+    write_memory(0x0100 + cpu->SP--, cpu->status | FLAG_BREAK | FLAG_UNUSED);
 }
 
 void pla(CPU *cpu, uint8_t *memory) {
-    cpu->A = memory[0x0100 + ++cpu->SP];
+    cpu->A = read_memory(0x0100 + ++cpu->SP); // Use read_memory for stack pop
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
 void plp(CPU *cpu, uint8_t *memory) {
-    cpu->status = memory[0x0100 + ++cpu->SP] & ~FLAG_UNUSED;
+    cpu->status = read_memory(0x0100 + ++cpu->SP) & ~FLAG_UNUSED;
 }
-
-
 
 void nop(CPU *cpu) {
     (void)cpu; // No operation, just advance the program counter
@@ -438,36 +411,43 @@ void lax(CPU *cpu, uint8_t *memory) {
 
 void sax(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address] = cpu->A & cpu->X;
+    write_memory(address, cpu->A & cpu->X); // Use write_memory
 }
 
 void dcp(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address]--;
-    if (cpu->A >= memory[address]) SET_FLAG(cpu, FLAG_CARRY);
-    else CLEAR_FLAG(cpu, FLAG_CARRY);
-    update_zero_and_negative_flags(cpu, cpu->A - memory[address]);
+    uint8_t value = read_memory(address) - 1; // Decrement using read_memory
+    write_memory(address, value); // Use write_memory
+    if (cpu->A >= value) {
+        SET_FLAG(cpu, FLAG_CARRY);
+    } else {
+        CLEAR_FLAG(cpu, FLAG_CARRY);
+    }
+    update_zero_and_negative_flags(cpu, cpu->A - value);
 }
 
 void isb(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address]++;
-    uint16_t result = cpu->A - memory[address] - (CHECK_FLAG(cpu, FLAG_CARRY) ? 0 : 1);
+    uint8_t value = read_memory(address) + 1; // Increment using read_memory
+    write_memory(address, value); // Use write_memory
+    uint16_t result = cpu->A - value - (CHECK_FLAG(cpu, FLAG_CARRY) ? 0 : 1);
     update_zero_and_negative_flags(cpu, result & 0xFF);
     cpu->A = result & 0xFF;
 }
 
 void slo(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address] <<= 1;
-    cpu->A |= memory[address];
+    uint8_t value = read_memory(address) << 1; // Shift using read_memory
+    write_memory(address, value); // Use write_memory
+    cpu->A |= value;
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
 void sre(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address] >>= 1;
-    cpu->A ^= memory[address];
+    uint8_t value = read_memory(address) >> 1; // Shift using read_memory
+    write_memory(address, value); // Use write_memory
+    cpu->A ^= value;
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
@@ -523,8 +503,10 @@ void tya(CPU *cpu) {
 void dec_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    memory[address]--;
-    update_zero_and_negative_flags(cpu, memory[address]);
+    uint8_t value = read_memory(address); // Read value using read_memory
+    value--;
+    write_memory(address, value); // Write back using write_memory
+    update_zero_and_negative_flags(cpu, value);
 }
 
 
@@ -537,23 +519,25 @@ void jmp_absolute(CPU *cpu, uint8_t *memory) {
 void jsr_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    cpu->SP -= 2;
-    memory[0x0100 + cpu->SP + 1] = (cpu->PC >> 8) & 0xFF;
-    memory[0x0100 + cpu->SP] = cpu->PC & 0xFF;
+    
+    uint16_t return_address = cpu->PC - 1;
+    write_memory(0x0100 + cpu->SP--, (return_address >> 8) & 0xFF); // High byte
+    write_memory(0x0100 + cpu->SP--, return_address & 0xFF); // Low byte
+    
     cpu->PC = address;
 }
 
 void rts(CPU *cpu, uint8_t *memory) {
-    uint8_t low = memory[0x0100 + ++cpu->SP];
-    uint8_t high = memory[0x0100 + ++cpu->SP];
+    uint8_t low = read_memory(0x0100 + ++cpu->SP);  // Pop low byte from stack
+    uint8_t high = read_memory(0x0100 + ++cpu->SP); // Pop high byte from stack
     cpu->PC = (high << 8) | low;
-    cpu->PC++;
+    cpu->PC++; // Increment PC after returning
 }
 
 void rti(CPU *cpu, uint8_t *memory) {
-    cpu->status = memory[0x0100 + ++cpu->SP];
-    uint8_t low = memory[0x0100 + ++cpu->SP];
-    uint8_t high = memory[0x0100 + ++cpu->SP];
+    cpu->status = read_memory(0x0100 + ++cpu->SP); // Pop status register
+    uint8_t low = read_memory(0x0100 + ++cpu->SP);  // Pop low byte from stack
+    uint8_t high = read_memory(0x0100 + ++cpu->SP); // Pop high byte from stack
     cpu->PC = (high << 8) | low;
 }
 
@@ -594,7 +578,7 @@ void bvs(CPU *cpu, uint8_t *memory) {
 
 void bit_zero_page(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    uint8_t value = memory[address];
+    uint8_t value = read_memory(address); // Use read_memory
     uint8_t result = cpu->A & value;
 
     if (result == 0) SET_FLAG(cpu, FLAG_ZERO);
@@ -610,7 +594,7 @@ void bit_zero_page(CPU *cpu, uint8_t *memory) {
 void bit_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    uint8_t value = memory[address];
+    uint8_t value = read_memory(address); // Use read_memory
     uint8_t result = cpu->A & value;
 
     if (result == 0) SET_FLAG(cpu, FLAG_ZERO);
@@ -623,33 +607,37 @@ void bit_absolute(CPU *cpu, uint8_t *memory) {
     else CLEAR_FLAG(cpu, FLAG_OVERFLOW);
 }
 
-
-
 void dec_zero_page(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address]--;
-    update_zero_and_negative_flags(cpu, memory[address]);
+    uint8_t value = read_memory(address); // Use read_memory
+    value--;
+    write_memory(address, value); // Use write_memory
+    update_zero_and_negative_flags(cpu, value);
 }
 
 void inc_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    memory[address]++;
-    update_zero_and_negative_flags(cpu, memory[address]);
+    uint8_t value = read_memory(address); // Use read_memory
+    value++;
+    write_memory(address, value); // Use write_memory
+    update_zero_and_negative_flags(cpu, value);
 }
 
 void inc_zero_page(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    memory[address]++;
-    update_zero_and_negative_flags(cpu, memory[address]);
+    uint8_t value = read_memory(address); 
+    value++;
+    write_memory(address, value); 
+    update_zero_and_negative_flags(cpu, value);
 }
 
 void jmp_indirect(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
 
-    uint16_t indirect_address = memory[address];
-    indirect_address |= (memory[address + 1] << 8);
+    uint16_t indirect_address = read_memory(address);
+    indirect_address |= (read_memory(address + 1) << 8);
 
     cpu->PC = indirect_address;
 }
@@ -657,94 +645,93 @@ void jmp_indirect(CPU *cpu, uint8_t *memory) {
 void asl_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    uint8_t value = memory[address];
+    uint8_t value = read_memory(address); 
 
     if (value & 0x80) SET_FLAG(cpu, FLAG_CARRY);
     else CLEAR_FLAG(cpu, FLAG_CARRY);
 
     value <<= 1;
-    memory[address] = value;
+    write_memory(address, value); 
     update_zero_and_negative_flags(cpu, value);
 }
 
 void lsr_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    uint8_t value = memory[address];
-
+    uint8_t value = read_memory(address); 
     if (value & 0x01) SET_FLAG(cpu, FLAG_CARRY);
     else CLEAR_FLAG(cpu, FLAG_CARRY);
 
     value >>= 1;
-    memory[address] = value;
+    write_memory(address, value);
     update_zero_and_negative_flags(cpu, value);
 }
 
 void rol_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    uint8_t value = memory[address];
+    uint8_t value = read_memory(address);
     uint8_t carry_in = CHECK_FLAG(cpu, FLAG_CARRY);
 
     if (value & 0x80) SET_FLAG(cpu, FLAG_CARRY);
     else CLEAR_FLAG(cpu, FLAG_CARRY);
 
     value = (value << 1) | carry_in;
-    memory[address] = value;
+    write_memory(address, value);
     update_zero_and_negative_flags(cpu, value);
 }
 
 void ror_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    uint8_t value = memory[address];
+    uint8_t value = read_memory(address); 
     uint8_t carry_in = CHECK_FLAG(cpu, FLAG_CARRY) ? 0x80 : 0x00;
 
     if (value & 0x01) SET_FLAG(cpu, FLAG_CARRY);
     else CLEAR_FLAG(cpu, FLAG_CARRY);
 
     value = (value >> 1) | carry_in;
-    memory[address] = value;
+    write_memory(address, value); 
     update_zero_and_negative_flags(cpu, value);
 }
 
-// EOR Indexed Indirect ($nn, X)
 void eor_indexed_indirect(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory) + cpu->X;
-    uint16_t effective_address = memory[address] | (memory[address + 1] << 8);
-    cpu->A ^= memory[effective_address];
+    uint16_t effective_address = read_memory(address) | (read_memory(address + 1) << 8);
+    cpu->A ^= read_memory(effective_address); 
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
-// EOR Indirect Indexed ($nn), Y
 void eor_indirect_indexed(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    uint16_t effective_address = memory[address] | (memory[address + 1] << 8);
-    cpu->A ^= memory[effective_address + cpu->Y];
+    uint16_t effective_address = read_memory(address) | (read_memory(address + 1) << 8);
+    cpu->A ^= read_memory(effective_address + cpu->Y); 
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
-// ORA Absolute, Y
 void ora_absolute_y(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory) | (fetch(cpu, memory) << 8);
-    cpu->A |= memory[address + cpu->Y];
+    cpu->A |= read_memory(address + cpu->Y); 
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
 // ORA Zero Page
 void ora_zero_page(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    cpu->A |= memory[address];
+    cpu->A |= read_memory(address); 
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
 // ASL Zero Page
 void asl_zero_page(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    if (memory[address] & 0x80) SET_FLAG(cpu, FLAG_CARRY);
+    uint8_t value = read_memory(address); 
+    if (value & 0x80) SET_FLAG(cpu, FLAG_CARRY);
     else CLEAR_FLAG(cpu, FLAG_CARRY);
-    memory[address] <<= 1;
-    update_zero_and_negative_flags(cpu, memory[address]);
+
+    value <<= 1;
+    write_memory(address, value);
+    update_zero_and_negative_flags(cpu, value);
 }
 
 // ALR (Unofficial)
@@ -764,37 +751,69 @@ void anc_immediate(CPU *cpu, uint8_t *memory) {
 
 void ora_absolute_x(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory) | (fetch(cpu, memory) << 8);
-    cpu->A |= memory[address + cpu->X];
+    cpu->A |= read_memory(address + cpu->X); 
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
 void nop_zero_page(CPU *cpu, uint8_t *memory) {
-    fetch(cpu, memory); // Read and ignore the zero-page address
+    fetch(cpu, memory); 
 }
 
 void eor_zero_page_x(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory) + cpu->X;
-    cpu->A ^= memory[address];
+    cpu->A ^= read_memory(address);
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
 void eor_indirect(CPU *cpu, uint8_t *memory) {
     uint8_t address = fetch(cpu, memory);
-    uint16_t effective_address = memory[address] | (memory[address + 1] << 8);
-    cpu->A ^= memory[effective_address];
+    uint16_t effective_address = read_memory(address) | (read_memory(address + 1) << 8);
+    cpu->A ^= read_memory(effective_address); 
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
 void nop_zero_page_x(CPU *cpu, uint8_t *memory) {
-    fetch(cpu, memory); // Read and ignore the zero-page X address
+    fetch(cpu, memory);
 }
 
-void brk(CPU *cpu, uint8_t * memory) {
-    cpu->PC++;
+
+void brk(CPU *cpu, uint8_t *memory) {
+    cpu->PC++; 
     SET_FLAG(cpu, FLAG_BREAK);
-    uint16_t return_address = cpu->PC + 1;
-    memory[0x0100 + cpu->SP--] = (return_address >> 8) & 0xFF;
-    memory[0x0100 + cpu->SP--] = return_address & 0xFF;
-    memory[0x0100 + cpu->SP--] = cpu->status;
-    cpu->PC = memory[0xFFFE] | (memory[0xFFFF] << 8); // Jump to the IRQ/BRK vector
+
+    uint16_t return_address = cpu->PC;
+    write_memory(0x0100 + cpu->SP--, (return_address >> 8) & 0xFF); // Push high byte
+    write_memory(0x0100 + cpu->SP--, return_address & 0xFF);        // Push low byte
+
+    write_memory(0x0100 + cpu->SP--, cpu->status | FLAG_BREAK | FLAG_UNUSED);
+
+    uint16_t irq_vector = read_memory(0xFFFE) | (read_memory(0xFFFF) << 8);
+
+    if (irq_vector == 0x0000) {
+        cpu->is_running = 0; 
+    } else {
+        cpu->PC = irq_vector;
+    }
+}
+
+
+void inc_absolute_x(CPU *cpu, uint8_t *memory) {
+    // Fetch the low and high bytes of the base address
+    uint16_t address = fetch(cpu, memory);
+    address |= (fetch(cpu, memory) << 8);
+    
+    // Add the X register to the base address
+    address += cpu->X;
+    
+    // Read the value at the effective address
+    uint8_t value = read_memory(address);
+    
+    // Increment the value
+    value++;
+    
+    // Write the incremented value back to memory
+    write_memory(address, value);
+    
+    // Update Zero and Negative flags
+    update_zero_and_negative_flags(cpu, value);
 }

@@ -1,4 +1,5 @@
 #include "cpu.h"
+#include "memory.h"
 #include <stdio.h>
 
 #define MEMORY_SIZE 65536
@@ -10,15 +11,13 @@ int main(int argc, char**argv) {
     }
 
     CPU cpu;
-    uint8_t memory[MEMORY_SIZE] = {0};
-
+    initialize_memory();
     reset_cpu(&cpu);
     
-    const uint16_t load_address = 0x0000;
-    load_program(&cpu, memory, argv[1], load_address);
+    const uint16_t load_address = 0x0600;
+    load_program(argv[1], load_address);
 
-    // Execute the program
-    while (cpu.PC < 0x617) {
+    while (cpu.is_running) {
         execute(&cpu, memory);
     }
 

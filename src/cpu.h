@@ -20,12 +20,13 @@ typedef struct {
     uint8_t SP;      
     uint8_t status;   
     uint16_t PC;     
+    uint8_t is_running; 
 } CPU;
 
 void reset_cpu(CPU * cpu);
 uint8_t fetch(CPU * cpu, uint8_t * memory);
 void execute(CPU *cpu, uint8_t * memory);
-void load_program(CPU *cpu, uint8_t *memory, const char *filename, uint16_t start_address);
+void load_program(const char *filename, uint16_t load_address);
 
 void lda_immediate(CPU *cpu, uint8_t *memory);
 void lda_zero_page(CPU *cpu, uint8_t *memory);
@@ -150,6 +151,7 @@ void nop_zero_page_x(CPU *cpu, uint8_t *memory);
 void asl_zero_page(CPU *cpu, uint8_t *memory);
 void alr_immediate(CPU *cpu, uint8_t *memory);
 void anc_immediate(CPU *cpu, uint8_t *memory);
+void inc_absolute_x(CPU *cpu, uint8_t *memory);
 
 void brk(CPU *cpu, uint8_t * memory);
 
