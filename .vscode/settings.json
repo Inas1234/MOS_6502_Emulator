@@ -1,6 +1,7 @@
 {
   "files.associations": {
     "*.embeddedhtml": "html",
-    "*.inc": "cpp"
+    "*.inc": "cpp",
+    "filesystem": "cpp"
   }
 }

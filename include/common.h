@@ -19,10 +19,9 @@
 #define ROM_START            0x8000
 #define ROM_END              0xFFFF
 
-#define SET_FLAG(cpu, flag) (cpu->status |= (flag))
-#define CLEAR_FLAG(cpu, flag) (cpu->status &= ~(flag))
-#define CHECK_FLAG(cpu, flag) (cpu->status & (flag))
-
+#define SET_FLAG(cpu, flag)   ( cpu->status |= flag )
+#define CLEAR_FLAG(cpu, flag) ( cpu->status &= ~flag )
+#define CHECK_FLAG(cpu, flag) ( cpu->status & flag )
 
 
 #endif

@@ -1,17 +1,32 @@
 #include "cpu.h"
 #include "memory.h"
 
+// void update_zero_and_negative_flags(CPU *cpu, uint8_t value) {
+//     if (value == 0)
+//         cpu->status |= FLAG_ZERO; // Set Zero flag if value is zero
+//     else
+//         cpu->status &= ~FLAG_ZERO; // Clear Zero flag if non-zero
+
+//     if (value & 0x80)
+//         cpu->status |= FLAG_NEGATIVE; // Set Negative flag if high bit is set
+//     else
+//         cpu->status &= ~FLAG_NEGATIVE; // Clear Negative flag if high bit is not set
+// }
+
+
 
 void update_zero_and_negative_flags(CPU *cpu, uint8_t value) {
     if (value == 0)
-        SET_FLAG(cpu, FLAG_ZERO);
+        SET_FLAG(cpu, FLAG_ZERO); // Set Zero flag if value is zero
     else
-        CLEAR_FLAG(cpu, FLAG_ZERO);
+        CLEAR_FLAG(cpu, FLAG_ZERO); // Clear Zero flag if non-zero
 
     if (value & 0x80)
-        SET_FLAG(cpu, FLAG_NEGATIVE);
+        SET_FLAG(cpu, FLAG_NEGATIVE); // Set Negative flag if high bit is set
     else
-        CLEAR_FLAG(cpu, FLAG_NEGATIVE);
+        CLEAR_FLAG(cpu, FLAG_NEGATIVE); // Clear Negative flag if high bit is not set
+    
+    CLEAR_FLAG(cpu, FLAG_BREAK);
 }
 
 
@@ -152,7 +167,7 @@ void execute(CPU *cpu, uint8_t *memory) {
         case 0xFE: inc_absolute_x(cpu, memory); break;
 
 
-        case 0x02: brk(cpu, memory); break; // Handle 0x02 as BRK
+        case 0x02: brk(cpu, memory); break; 
 
         default:
             printf("Unknown opcode: 0x%02X\n", opcode);
@@ -162,7 +177,7 @@ void execute(CPU *cpu, uint8_t *memory) {
 
 
 void lda_immediate(CPU *cpu, uint8_t *memory) {
-    cpu->A = read_memory(cpu->PC++); // Fetch using read_memory
+    cpu->A = read_memory(cpu->PC++); 
     update_zero_and_negative_flags(cpu, cpu->A);
 }
 
@@ -179,7 +194,7 @@ void lda_absolute(CPU *cpu, uint8_t *memory) {
 void sta_absolute(CPU *cpu, uint8_t *memory) {
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
-    write_memory(address, cpu->A); // Write using write_memory
+    write_memory(address, cpu->A); 
 }
 
 
@@ -794,26 +809,22 @@ void brk(CPU *cpu, uint8_t *memory) {
     } else {
         cpu->PC = irq_vector;
     }
+
+    CLEAR_FLAG(cpu, FLAG_BREAK);
 }
 
 
 void inc_absolute_x(CPU *cpu, uint8_t *memory) {
-    // Fetch the low and high bytes of the base address
     uint16_t address = fetch(cpu, memory);
     address |= (fetch(cpu, memory) << 8);
     
-    // Add the X register to the base address
     address += cpu->X;
     
-    // Read the value at the effective address
     uint8_t value = read_memory(address);
     
-    // Increment the value
     value++;
     
-    // Write the incremented value back to memory
     write_memory(address, value);
     
-    // Update Zero and Negative flags
     update_zero_and_negative_flags(cpu, value);
 }
